@@ -196,15 +196,20 @@
         document.getElementById(`opts-container-${i}`).style.display = (type === 'check') ? 'flex' : 'none';
     }
 
-    // LOGIN
     function attemptLogin() {
-        const pass = document.getElementById('passInput').value;
+        const pass = document.getElementById('passInput').value.trim();
+        if(pass === "") return alert("Enter passcode!");
+
         if(pass === MASTER_KEY) {
             saveLogin("Master", "master");
         } else {
-            db.ref('staff_access').once('value', snap => {
+            db.ref('staff_access').once('value').then(snap => {
                 const staffs = snap.val() || {};
-                const found = Object.values(staffs).find(s => s.pass === pass);
+                let found = null;
+                Object.values(staffs).forEach(s => {
+                    if(String(s.pass) === pass) found = s;
+                });
+
                 if(found) saveLogin(found.name, "staff");
                 else alert("Access Denied!");
             });
@@ -230,13 +235,13 @@
 
     function logout() { localStorage.removeItem('ahypar_user'); location.reload(); }
 
-    // STAFF MGMT
     function addStaff() {
         const name = document.getElementById('new-staff-name').value;
         const pass = document.getElementById('new-staff-pass').value;
         if(name && pass) db.ref('staff_access').push({name, pass}).then(() => {
             alert("Staff Added!");
-            loadStaffList();
+            document.getElementById('new-staff-name').value = '';
+            document.getElementById('new-staff-pass').value = '';
         });
     }
 
@@ -256,7 +261,6 @@
     }
     function removeStaff(key) { if(confirm("Remove this staff?")) db.ref('staff_access/' + key).remove(); }
 
-    // FORM LOGIC
     function publishForm() {
         const title = document.getElementById('admin-title').value;
         if(!title) return alert("Position Title Required!");
@@ -313,6 +317,7 @@
 
     function loadAdminTable() {
         const user = JSON.parse(localStorage.getItem('ahypar_user'));
+        if(!user) return;
         db.ref('recruitment_forms').once('value', snap => {
             const data = snap.val() || {};
             const tbody = document.getElementById('admin-live-table');
