@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AHYPAR | ELITE MANAGEMENT</title>
+    <title>AHYPAR | Admin Registration</title>
     <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
     <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
@@ -310,7 +310,7 @@
             let html = `<div style="margin-bottom:15px;"><label style="font-size:14px; color:var(--cyan)">${q.text} ${q.required ? '*' : ''}</label>`;
             if(q.type === 'short') html += `<input type="text" name="Q${idx+1}" ${q.required?'required':''}>`;
             else if(q.type === 'para') html += `<textarea name="Q${idx+1}" rows="3" ${q.required?'required':''}></textarea>`;
-            else if(q.type === 'check') html += `<div style="display:flex; gap:15px; margin-top:5px;"><label style="font-size:12px;"><input type="checkbox" name="Q${idx+1}_A" value="${q.opt1}"> ${q.opt1}</label><label style="font-size:12px;"><input type="checkbox" name="Q${idx+1}_B" value="${q.opt2}"> ${q.opt2}</label></div>`;
+            else if(q.type === 'check') html += `<div style="display:flex; gap:15px; margin-top:5px;"><label style="font-size:12px; cursor:pointer;"><input type="radio" name="Q${idx+1}" value="${q.opt1}" ${q.required?'required':''} style="width:auto; margin-right:5px;"> ${q.opt1}</label><label style="font-size:12px; cursor:pointer;"><input type="radio" name="Q${idx+1}" value="${q.opt2}" style="width:auto; margin-right:5px;"> ${q.opt2}</label></div>`;
             container.innerHTML += html + `</div>`;
         });
     }
