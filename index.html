@@ -5,8 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AHYPAR | Admin Registration</title>
     <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+    <!-- Firebase App (the core Firebase SDK) -->
     <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-app-compat.js"></script>
+    <!-- Firebase Realtime Database -->
     <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-database-compat.js"></script>
+    <!-- Firebase Authentication -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.10/firebase-auth-compat.js"></script>
     <style>
         :root {
             --cyan: #00f2ff;
@@ -108,6 +112,9 @@
             background: #fff; transform: scale(1.02); 
             box-shadow: 0 0 25px rgba(255,255,255,0.3); 
         }
+        .btn-main:disabled {
+            opacity: 0.5; cursor: not-allowed; transform: none;
+        }
 
         .btn-del { 
             background: linear-gradient(45deg, #ff0055, #88002d); color: #fff; 
@@ -149,6 +156,19 @@
         input[type="radio"] { width: 18px; height: 18px; accent-color: var(--cyan); cursor: pointer; }
         .radio-label { display: flex; align-items: center; gap: 10px; cursor: pointer; background: rgba(255,255,255,0.05); padding: 10px 15px; border-radius: 8px; border: 1px solid transparent; transition: 0.3s; }
         .radio-label:hover { border-color: var(--cyan); background: rgba(0, 242, 255, 0.05); }
+
+        /* Loading spinner for login */
+        .login-status {
+            text-align: center;
+            font-size: 13px;
+            letter-spacing: 2px;
+            margin-top: 12px;
+            min-height: 22px;
+            color: var(--cyan);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .login-status.visible { opacity: 1; }
 
     </style>
 </head>
@@ -195,11 +215,13 @@
             </form>
         </div>
 
+        <!-- LOGIN VIEW — HTML structure unchanged, single PIN input only -->
         <div id="view-login" class="view">
             <h2 class="sec-title">SYSTEM AUTHENTICATION</h2>
             <p style="margin-bottom: 20px; opacity: 0.7;">Authorized Personnel Only. Please enter your encryption key.</p>
-            <input type="password" id="passInput" placeholder="Enter Access Passcode">
-            <button class="btn-main" onclick="attemptLogin()">INITIATE LOGIN</button>
+            <input type="password" id="passInput" placeholder="Enter Access Passcode" onkeydown="if(event.key==='Enter') attemptLogin()">
+            <button class="btn-main" id="loginBtn" onclick="attemptLogin()">INITIATE LOGIN</button>
+            <p class="login-status" id="loginStatus">VERIFYING CREDENTIALS...</p>
         </div>
 
         <div id="view-dash" class="view">
@@ -261,6 +283,9 @@
 </div>
 
 <script>
+    // ─────────────────────────────────────────────────────────────────────────
+    // FIREBASE INIT
+    // ─────────────────────────────────────────────────────────────────────────
     const firebaseConfig = {
         apiKey: "AIzaSyAT14XHqlGWI-5fAharudfI6G9jReNJijE",
         authDomain: "new-project-99c14.firebaseapp.com",
@@ -273,9 +298,17 @@
     };
 
     firebase.initializeApp(firebaseConfig);
-    const db = firebase.database();
-    const MASTER_KEY = "27052011";
+    const db   = firebase.database();
+    const auth = firebase.auth();
 
+    // Owner email constant — PIN/password is NEVER stored here.
+    // The entered PIN is used directly as the Firebase Auth password,
+    // so the actual secret lives solely inside Firebase Authentication.
+    const OWNER_EMAIL = "shafinmirza59@gmail.com";
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // UI HELPERS
+    // ─────────────────────────────────────────────────────────────────────────
     function toggleMenu() {
         const m = document.getElementById('mainMenu');
         m.style.display = m.style.display === 'block' ? 'none' : 'block';
@@ -285,10 +318,10 @@
         document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
         document.getElementById(id).classList.add('active');
         document.getElementById('mainMenu').style.display = 'none';
-        window.scrollTo(0,0);
-        if(id === 'view-home') loadPublicPosts();
-        if(id === 'view-dash') loadAdminTable();
-        if(id === 'view-manage') loadStaffList();
+        window.scrollTo(0, 0);
+        if (id === 'view-home')   loadPublicPosts();
+        if (id === 'view-dash')   loadAdminTable();
+        if (id === 'view-manage') loadStaffList();
     }
 
     function toggleOptions(i) {
@@ -296,53 +329,115 @@
         document.getElementById(`opts-container-${i}`).style.display = (type === 'check') ? 'flex' : 'none';
     }
 
-    function attemptLogin() {
-        const pass = document.getElementById('passInput').value.trim();
-        if(pass === "") return alert("Please enter your passcode.");
-
-        if(pass === MASTER_KEY) {
-            saveLogin("Master Operator", "master");
+    function setLoginBusy(busy, message = '') {
+        const btn    = document.getElementById('loginBtn');
+        const status = document.getElementById('loginStatus');
+        btn.disabled = busy;
+        if (message) {
+            status.textContent = message;
+            status.classList.add('visible');
         } else {
-            db.ref('staff_access').once('value').then(snap => {
-                const staffs = snap.val() || {};
-                let found = null;
-                Object.values(staffs).forEach(s => {
-                    if(String(s.pass) === pass) found = s;
-                });
-
-                if(found) saveLogin(found.name, "staff");
-                else alert("ACCESS DENIED: Invalid Passcode.");
-            });
+            status.classList.remove('visible');
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // REFACTORED LOGIN — Two-step PIN verification
+    // ─────────────────────────────────────────────────────────────────────────
+    async function attemptLogin() {
+        const pin = document.getElementById('passInput').value.trim();
+        if (!pin) { alert("Please enter your passcode."); return; }
+
+        setLoginBusy(true, 'VERIFYING CREDENTIALS...');
+
+        // ── STEP 1: Try Firebase Authentication (Owner check) ──────────────
+        // The PIN is used as the password against the owner email.
+        // The actual secret is stored ONLY in Firebase Auth — never in this file.
+        try {
+            const credential = await auth.signInWithEmailAndPassword(OWNER_EMAIL, pin);
+            // Success → Owner / Master access granted
+            // Sign back out of Firebase Auth immediately;
+            // session state is managed by our own localStorage below.
+            await auth.signOut();
+            setLoginBusy(false);
+            saveLogin("Master Operator", "master");
+            return; // ← stop here, no DB check needed
+        } catch (authErr) {
+            // Auth failed → not the owner PIN. Proceed to Step 2.
+            // We intentionally swallow all auth errors and try DB next.
+        }
+
+        // ── STEP 2: Query Realtime Database for admin / staff PIN ──────────
+        try {
+            const snap = await db.ref('staff_access').once('value');
+            const staffMap = snap.val() || {};
+
+            let matchedStaff = null;
+            for (const [key, member] of Object.entries(staffMap)) {
+                // PIN is compared as a string to support numeric passcodes
+                if (String(member.pass) === pin) {
+                    matchedStaff = { id: key, ...member };
+                    break;
+                }
+            }
+
+            if (matchedStaff) {
+                setLoginBusy(false);
+                // Use the role stored in the DB record; fall back to 'staff'
+                const role = matchedStaff.role || 'staff';
+                saveLogin(matchedStaff.name, role);
+            } else {
+                // Neither Firebase Auth nor DB matched — invalid PIN
+                setLoginBusy(false);
+                alert("Invalid PIN Code");
+            }
+        } catch (dbErr) {
+            setLoginBusy(false);
+            alert("Database error. Please try again.");
+            console.error("DB lookup error:", dbErr);
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // SESSION MANAGEMENT
+    // ─────────────────────────────────────────────────────────────────────────
     function saveLogin(name, role) {
-        localStorage.setItem('ahypar_user', JSON.stringify({name, role}));
+        localStorage.setItem('ahypar_user', JSON.stringify({ name, role }));
         updateUI();
         showView('view-dash');
     }
 
     function updateUI() {
         const user = JSON.parse(localStorage.getItem('ahypar_user'));
-        if(user) {
+        if (user) {
             document.getElementById('op-name').innerText = user.name;
-            document.getElementById('loginLink').style.display = 'none';
-            document.getElementById('dashLink').style.display = 'block';
+            document.getElementById('loginLink').style.display  = 'none';
+            document.getElementById('dashLink').style.display   = 'block';
             document.getElementById('logoutLink').style.display = 'block';
-            if(user.role === 'master') document.getElementById('manageLink').style.display = 'block';
+            if (user.role === 'master') {
+                document.getElementById('manageLink').style.display = 'block';
+            }
         }
     }
 
-    function logout() { localStorage.removeItem('ahypar_user'); location.reload(); }
+    function logout() {
+        localStorage.removeItem('ahypar_user');
+        location.reload();
+    }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // STAFF MANAGEMENT
+    // ─────────────────────────────────────────────────────────────────────────
     function addStaff() {
         const name = document.getElementById('new-staff-name').value;
         const pass = document.getElementById('new-staff-pass').value;
-        if(name && pass) db.ref('staff_access').push({name, pass}).then(() => {
-            alert("New access key generated successfully.");
-            document.getElementById('new-staff-name').value = '';
-            document.getElementById('new-staff-pass').value = '';
-        });
+        if (name && pass) {
+            db.ref('staff_access').push({ name, pass }).then(() => {
+                alert("New access key generated successfully.");
+                document.getElementById('new-staff-name').value = '';
+                document.getElementById('new-staff-pass').value = '';
+            });
+        }
     }
 
     function loadStaffList() {
@@ -352,38 +447,53 @@
             container.innerHTML = '<h3 class="sec-title" style="font-size:1.4rem;">AUTHORIZED PERSONNEL</h3>';
             Object.keys(list).forEach(key => {
                 const s = list[key];
-                container.innerHTML += `<div class="q-builder-card" style="display:flex; justify-content:space-between; align-items:center;">
-                    <span><b>${s.name}</b> <span style="margin-left:10px; opacity:0.5; font-size:12px;">KEY: ${s.pass}</span></span>
-                    <button class="btn-del" onclick="removeStaff('${key}')">Revoke</button>
-                </div>`;
+                container.innerHTML += `
+                    <div class="q-builder-card" style="display:flex; justify-content:space-between; align-items:center;">
+                        <span><b>${s.name}</b> <span style="margin-left:10px; opacity:0.5; font-size:12px;">KEY: ${s.pass}</span></span>
+                        <button class="btn-del" onclick="removeStaff('${key}')">Revoke</button>
+                    </div>`;
             });
         });
     }
-    function removeStaff(key) { if(confirm("Revoke this member's access permanently?")) db.ref('staff_access/' + key).remove(); }
 
+    function removeStaff(key) {
+        if (confirm("Revoke this member's access permanently?")) {
+            db.ref('staff_access/' + key).remove();
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // RECRUITMENT BUILDER
+    // ─────────────────────────────────────────────────────────────────────────
     function publishForm() {
         const title = document.getElementById('admin-title').value;
-        if(!title) return alert("Position Title is required.");
+        if (!title) return alert("Position Title is required.");
+
         let questions = [];
         let filled = 0;
-        for(let i=1; i<=8; i++) {
+        for (let i = 1; i <= 8; i++) {
             const text = document.getElementById(`q-text-${i}`).value;
-            if(text) {
+            if (text) {
                 filled++;
                 questions.push({
-                    text: text, type: document.getElementById(`q-type-${i}`).value,
+                    text:     text,
+                    type:     document.getElementById(`q-type-${i}`).value,
                     required: document.getElementById(`q-req-${i}`).checked,
-                    opt1: document.getElementById(`q-opt1-${i}`).value, opt2: document.getElementById(`q-opt2-${i}`).value
+                    opt1:     document.getElementById(`q-opt1-${i}`).value,
+                    opt2:     document.getElementById(`q-opt2-${i}`).value
                 });
             }
         }
-        if(filled < 7) return alert("Please define at least 7 questions.");
+        if (filled < 7) return alert("Please define at least 7 questions.");
         db.ref('recruitment_forms').push({ title, questions, status: 'open' }).then(() => {
             alert("Recruitment mission deployed!");
             showView('view-dash');
         });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // PUBLIC POSTS
+    // ─────────────────────────────────────────────────────────────────────────
     function loadPublicPosts() {
         db.ref('recruitment_forms').on('value', snap => {
             const data = snap.val() || {};
@@ -392,7 +502,8 @@
             Object.keys(data).forEach(key => {
                 const item = data[key];
                 container.innerHTML += `
-                    <div class="q-builder-card" onclick="${item.status==='open' ? `renderUserForm(${JSON.stringify(item).replace(/"/g, '&quot;')})` : ''}" style="cursor:pointer; display:flex; align-items:center; justify-content:space-between;">
+                    <div class="q-builder-card" onclick="${item.status === 'open' ? `renderUserForm(${JSON.stringify(item).replace(/"/g, '&quot;')})` : ''}"
+                         style="cursor:pointer; display:flex; align-items:center; justify-content:space-between;">
                         <div>
                            <h3 style="color:var(--cyan); text-transform:uppercase; letter-spacing:2px;">${item.title}</h3>
                            <p style="font-size:11px; opacity:0.6; margin-top:5px;">${item.status === 'open' ? 'Click to apply now' : 'Applications closed'}</p>
@@ -411,16 +522,16 @@
         container.innerHTML = '';
         formData.questions.forEach((q, idx) => {
             let html = `<div style="margin-bottom:20px;"><label style="font-size:15px; color:var(--cyan); display:block; margin-bottom:10px; font-weight:600;">${q.text} ${q.required ? '<span style="color:var(--magenta)">*</span>' : ''}</label>`;
-            
-            if(q.type === 'short') {
-                html += `<input type="text" name="Q${idx+1}" ${q.required?'required':''} placeholder="Type your answer...">`;
-            } else if(q.type === 'para') {
-                html += `<textarea name="Q${idx+1}" rows="4" ${q.required?'required':''} placeholder="Provide detailed information..."></textarea>`;
-            } else if(q.type === 'check') {
+
+            if (q.type === 'short') {
+                html += `<input type="text" name="Q${idx+1}" ${q.required ? 'required' : ''} placeholder="Type your answer...">`;
+            } else if (q.type === 'para') {
+                html += `<textarea name="Q${idx+1}" rows="4" ${q.required ? 'required' : ''} placeholder="Provide detailed information..."></textarea>`;
+            } else if (q.type === 'check') {
                 html += `
                 <div style="display:flex; flex-direction:column; gap:10px;">
                     <label class="radio-label">
-                        <input type="radio" name="Q${idx+1}" value="${q.opt1}" ${q.required?'required':''}> ${q.opt1}
+                        <input type="radio" name="Q${idx+1}" value="${q.opt1}" ${q.required ? 'required' : ''}> ${q.opt1}
                     </label>
                     <label class="radio-label">
                         <input type="radio" name="Q${idx+1}" value="${q.opt2}"> ${q.opt2}
@@ -431,9 +542,12 @@
         });
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // ADMIN TABLE
+    // ─────────────────────────────────────────────────────────────────────────
     function loadAdminTable() {
         const user = JSON.parse(localStorage.getItem('ahypar_user'));
-        if(!user) return;
+        if (!user) return;
         db.ref('recruitment_forms').once('value', snap => {
             const data = snap.val() || {};
             const tbody = document.getElementById('admin-live-table');
@@ -458,8 +572,15 @@
         db.ref('recruitment_forms/' + key).update({ status: cur === 'open' ? 'closed' : 'open' }).then(() => loadAdminTable());
     }
 
-    function deleteForm(key) { if(confirm("Permanently delete this recruitment form?")) db.ref('recruitment_forms/' + key).remove().then(() => loadAdminTable()); }
+    function deleteForm(key) {
+        if (confirm("Permanently delete this recruitment form?")) {
+            db.ref('recruitment_forms/' + key).remove().then(() => loadAdminTable());
+        }
+    }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // BOOT
+    // ─────────────────────────────────────────────────────────────────────────
     updateUI();
     loadPublicPosts();
 </script>
